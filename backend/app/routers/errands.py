@@ -22,6 +22,7 @@ from app.models import (
     User,
     WalletTransaction,
 )
+from app.planner import reprice_open_plans
 from app.schemas import ErrandCreate, ErrandItemOut, ErrandItemUpdate, ErrandOut, PersonOut
 
 router = APIRouter(prefix="/errands", tags=["errands"])
@@ -276,6 +277,8 @@ def complete_errand(errand_id: int, user: CurrentUser, db: DB) -> ErrandOut:
     errand.status = ErrandStatus.completed
     errand.completed_at = datetime.now(timezone.utc)
     _feed_back_prices(db, errand)
+    db.flush()
+    reprice_open_plans(db, family.id)
 
     db.commit()
     db.refresh(errand)

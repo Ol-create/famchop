@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from app.deps import DB, AdminUser, CurrentUser
 from app.models import Price
+from app.planner import reprice_open_plans
 from app.schemas import PriceListUpdate, PriceOut
 
 router = APIRouter(prefix="/prices", tags=["prices"])
@@ -33,5 +34,7 @@ def replace_prices(body: PriceListUpdate, admin: AdminUser, db: DB) -> list[Pric
     for removed in existing.values():
         db.delete(removed)
 
+    db.flush()
+    reprice_open_plans(db, admin.family_id)
     db.commit()
     return _family_prices(db, admin.family_id)

@@ -65,6 +65,7 @@ export function PricesModal({
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(keys.prices, data);
+      queryClient.invalidateQueries({ queryKey: keys.latestPlan }); // open plans are repriced on save
       setValues({});
       if (onSaved) onSaved(data);
       else {

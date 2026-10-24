@@ -80,6 +80,7 @@ export default function PricesPage() {
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(keys.prices, data);
+      queryClient.invalidateQueries({ queryKey: keys.latestPlan }); // open plans are repriced on save
       toast.success("Prices saved");
     },
     onError: (e) => toast.error(e.message),

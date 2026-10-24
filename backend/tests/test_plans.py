@@ -269,3 +269,36 @@ def test_reprice_blocked_once_shopping_started(client, gemma, family):
     assert client.post("/errands", headers=mum, json={"plan_id": plan["id"], "assigned_to": tunde_id}).status_code == 201
     r = client.post(f"/plans/{plan['id']}/reprice", headers=mum)
     assert r.status_code == 400 and "already shopping" in r.json()["detail"]
+
+
+def _set_price(client, headers, item, price):
+    rows = [{"item": p["item"], "unit": p["unit"], "price": str(price) if p["item"] == item else p["price"]}
+            for p in client.get("/prices", headers=headers).json()]
+    assert client.put("/prices", headers=headers, json={"items": rows}).status_code == 200
+
+
+def test_saving_prices_updates_open_plans(client, gemma, family):
+    mum = family["mum"]
+    gemma.queue(plan_reply([{"item": "Rice", "unit": "kg", "quantity": 2}, {"item": "Tomatoes", "unit": "kg", "quantity": 2}]))
+    plan = client.post("/plans", headers=mum, json={"budget": 10000}).json()
+    assert plan["total_cost"] == "3000.00" and plan["unpriced_items"] == ["Tomatoes"]
+
+    _set_price(client, mum, "Tomatoes", 2000)
+    latest = client.get("/plans/latest", headers=mum).json()
+    assert latest["total_cost"] == "7000.00" and latest["unpriced_items"] == []
+
+    _set_price(client, mum, "Rice", 1600)  # price changes also flow through
+    assert client.get("/plans/latest", headers=mum).json()["total_cost"] == "7200.00"
+
+
+def test_saving_prices_leaves_plans_being_shopped_alone(client, gemma, family):
+    mum = family["mum"]
+    client.post("/wallet/fund", headers=mum, json={"amount": 10000})
+    gemma.queue(plan_reply([{"item": "Rice", "unit": "kg", "quantity": 2}]))
+    plan = client.post("/plans", headers=mum, json={"budget": 10000}).json()
+    client.post(f"/plans/{plan['id']}/approve", headers=mum)
+    tunde_id = client.get("/me", headers=family["tunde"]).json()["id"]
+    client.post("/errands", headers=mum, json={"plan_id": plan["id"], "assigned_to": tunde_id})
+
+    _set_price(client, mum, "Rice", 9999)
+    assert client.get(f"/plans/{plan['id']}", headers=mum).json()["total_cost"] == "3000.00"

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import AIError, ask_json
-from app.models import Plan, PlanItem, Price, User
+from app.models import Errand, Plan, PlanItem, Price, User
 from app.schemas import MenuDay, NutritionAnalysis, PlanNutrition, Swap
 
 log = logging.getLogger(__name__)
@@ -323,3 +323,11 @@ def reprice_plan(db: Session, plan: Plan) -> None:
     # Swaps were suggested for the old totals; drop them once the plan fits
     if plan.total_cost <= plan.budget:
         plan.swaps_json = []
+
+
+def reprice_open_plans(db: Session, family_id: int) -> None:
+    """Keep plans nobody is shopping for yet in step with the price list. Plans with an errand keep
+    their costs, because the shopper's tally was based on them."""
+    has_errand = select(Errand.id).where(Errand.plan_id == Plan.id).exists()
+    for plan in db.scalars(select(Plan).where(Plan.family_id == family_id, ~has_errand)):
+        reprice_plan(db, plan)

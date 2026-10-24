@@ -43,6 +43,9 @@ export default function PlanPage() {
   const errand = current ? errands.data?.find((e) => e.plan_id === current.id) : undefined;
   const unpricedPrices = prices.data?.filter((p) => p.price === null).length ?? 0;
   const pricedPrices = (prices.data?.length ?? 0) - unpricedPrices;
+  // Plan lines still unpriced even though the price list now has a price for them (e.g. plan made first)
+  const listPrice = new Map((prices.data ?? []).filter((p) => p.price !== null).map((p) => [`${p.item.toLowerCase()}|${p.unit.toLowerCase()}`, p]));
+  const stale = current?.items.filter((i) => i.unit_price === null && listPrice.has(`${i.item.toLowerCase()}|${i.unit.toLowerCase()}`)) ?? [];
 
   const onPlan = (p: Plan) => {
     queryClient.setQueryData(keys.latestPlan, p);
@@ -181,13 +184,22 @@ export default function PlanPage() {
                       ? "None of these foods have a price, so the total can't be worked out"
                       : `${plural(current.unpriced_items.length, "food")} without a price ${current.unpriced_items.length === 1 ? "isn't" : "aren't"} in the total`}
                   </p>
-                  <p className="mt-0.5 text-muted">{current.unpriced_items.join(", ")}</p>
+                  <p className="mt-0.5 text-muted">
+                    {stale.length > 0
+                      ? `Your price list now has prices for ${stale.length === current.unpriced_items.length ? "all of them" : `${stale.length} of them`}. Update the plan to use them.`
+                      : current.unpriced_items.join(", ")}
+                  </p>
                 </div>
-                {isAdmin && !errand && (
-                  <Button onClick={() => setPricesModal("after")} loading={reprice.isPending}>
-                    Add prices
-                  </Button>
-                )}
+                {isAdmin && !errand &&
+                  (stale.length > 0 ? (
+                    <Button onClick={() => reprice.mutate(current.id)} loading={reprice.isPending}>
+                      Update costs
+                    </Button>
+                  ) : (
+                    <Button onClick={() => setPricesModal("after")} loading={reprice.isPending}>
+                      Add prices
+                    </Button>
+                  ))}
               </div>
             )}
             {current.swaps.length > 0 && (
