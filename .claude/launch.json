@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\hp\\Desktop\\famchop\\backend\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8000", "--app-dir", "C:\\Users\\hp\\Desktop\\famchop\\backend"],
+      "cwd": "C:\\Users\\hp\\Desktop\\famchop\\backend",
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\hp\\Desktop\\famchop\\frontend"],
+      "cwd": "C:\\Users\\hp\\Desktop\\famchop\\frontend",
+      "port": 3000
+    }
+  ]
+}
