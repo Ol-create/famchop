@@ -1,8 +1,9 @@
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import AgeGroup, Role
+from app.models import AgeGroup, Role, TransactionType
 
 
 class ORMModel(BaseModel):
@@ -109,3 +110,68 @@ class ProfileUpdate(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: Role
+
+
+# ---------- Prices ----------
+
+MAX_MONEY = Decimal("9999999999.99")
+
+
+class PriceIn(BaseModel):
+    item: str = Field(min_length=1, max_length=120)
+    unit: str = Field(min_length=1, max_length=40)
+    price: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY, decimal_places=2)
+
+    @field_validator("item", "unit")
+    @classmethod
+    def strip_required(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("Required")
+        return v
+
+
+class PriceListUpdate(BaseModel):
+    items: list[PriceIn] = Field(max_length=200)
+
+    @model_validator(mode="after")
+    def no_duplicates(self) -> "PriceListUpdate":
+        seen: set[tuple[str, str]] = set()
+        for p in self.items:
+            key = (p.item.lower(), p.unit.lower())
+            if key in seen:
+                raise ValueError(f"'{p.item}' per {p.unit} is listed twice")
+            seen.add(key)
+        return self
+
+
+class PriceOut(ORMModel):
+    id: int
+    item: str
+    unit: str
+    price: Decimal | None
+    updated_at: datetime
+
+
+# ---------- Wallet ----------
+
+
+class FundRequest(BaseModel):
+    # Simulated money for the hackathon; cap a single top-up at ₦10m
+    amount: Decimal = Field(gt=0, le=Decimal("10000000"), decimal_places=2)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class TransactionOut(BaseModel):
+    id: int
+    type: TransactionType
+    amount: Decimal
+    note: str | None
+    user_name: str | None
+    errand_id: int | None
+    created_at: datetime
+
+
+class WalletOut(BaseModel):
+    balance: Decimal
+    transactions: list[TransactionOut]

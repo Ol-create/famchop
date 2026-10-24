@@ -2,8 +2,9 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.defaults import DEFAULT_ITEMS
 from app.deps import DB
-from app.models import Family, Role, User
+from app.models import Family, Price, Role, User
 from app.schemas import AuthResponse, LoginRequest, SignupRequest, UserOut
 from app.security import create_access_token, generate_invite_code, hash_password, verify_password
 
@@ -34,6 +35,7 @@ def signup(body: SignupRequest, db: DB) -> AuthResponse:
         role = Role.member
     else:
         family = Family(name=body.family_name, invite_code=_unique_invite_code(db, body.family_name))
+        family.prices = [Price(item=item, unit=unit) for item, unit in DEFAULT_ITEMS]
         db.add(family)
         role = Role.admin  # whoever creates the family runs it
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.routers import auth, family, me
+from app.routers import auth, family, me, prices, wallet
 
 app = FastAPI(title="FamChop API", version="0.1.0")
 
@@ -20,6 +20,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(me.router)
 app.include_router(family.router)
+app.include_router(prices.router)
+app.include_router(wallet.router)
 
 
 @app.get("/health")

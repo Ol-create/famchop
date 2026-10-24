@@ -103,7 +103,8 @@ class Price(Base):
     family_id: Mapped[int] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"), index=True)
     item: Mapped[str] = mapped_column(String(120))
     unit: Mapped[str] = mapped_column(String(40))
-    price: Mapped[Decimal] = mapped_column(Money)
+    # Null = item is on the list but the family hasn't entered their market price yet
+    price: Mapped[Decimal | None] = mapped_column(Money)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
