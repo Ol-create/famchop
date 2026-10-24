@@ -220,3 +220,52 @@ def test_missing_api_key_returns_503(client, family, monkeypatch):
     monkeypatch.setattr(ai.get_settings(), "gemini_api_key", "")
     r = client.post("/plans", headers=family["mum"], json={"budget": 5000})
     assert r.status_code == 503 and "GEMINI_API_KEY" in r.json()["detail"]
+
+
+# ---------- planning without prices / repricing ----------
+
+
+def test_cannot_plan_before_any_prices(client, gemma):
+    from tests.conftest import signup
+
+    mum, _ = signup(client, "Mum", family_name="New")  # 16 starter items, all unpriced
+    r = client.post("/plans", headers=mum, json={"budget": 30000})
+    assert r.status_code == 400 and "Add your market prices first" in r.json()["detail"]
+    assert gemma.prompts == []  # no AI call wasted
+
+
+def test_reprice_after_filling_in_prices(client, gemma, family):
+    mum = family["mum"]
+    gemma.queue(plan_reply([
+        {"item": "Rice", "unit": "kg", "quantity": 2},
+        {"item": "Tomatoes", "unit": "kg", "quantity": 2},  # on the list, unpriced
+        {"item": "Maggi", "unit": "pack", "quantity": 1},  # not on the list at all
+    ]))
+    plan = client.post("/plans", headers=mum, json={"budget": 10000}).json()
+    assert plan["total_cost"] == "3000.00" and plan["unpriced_items"] == ["Tomatoes", "Maggi"]
+
+    prices = client.get("/prices", headers=mum).json()
+    rows = [{"item": p["item"], "unit": p["unit"], "price": "2000" if p["item"] == "Tomatoes" else p["price"]} for p in prices]
+    rows.append({"item": "Maggi", "unit": "pack", "price": "800"})
+    client.put("/prices", headers=mum, json={"items": rows})
+
+    r = client.post(f"/plans/{plan['id']}/reprice", headers=mum)
+    assert r.status_code == 200, r.text
+    repriced = r.json()
+    # 2*1500 + 2*2000 + 800
+    assert repriced["total_cost"] == "7800.00" and repriced["unpriced_items"] == []
+    assert repriced["menu"] == plan["menu"]  # same plan, no new AI call
+    assert len(gemma.prompts) == 1
+    assert client.post(f"/plans/{plan['id']}/reprice", headers=family["tunde"]).status_code == 403
+
+
+def test_reprice_blocked_once_shopping_started(client, gemma, family):
+    mum = family["mum"]
+    client.post("/wallet/fund", headers=mum, json={"amount": 10000})
+    gemma.queue(plan_reply([{"item": "Rice", "unit": "kg", "quantity": 2}]))
+    plan = client.post("/plans", headers=mum, json={"budget": 10000}).json()
+    client.post(f"/plans/{plan['id']}/approve", headers=mum)
+    tunde_id = client.get("/me", headers=family["tunde"]).json()["id"]
+    assert client.post("/errands", headers=mum, json={"plan_id": plan["id"], "assigned_to": tunde_id}).status_code == 201
+    r = client.post(f"/plans/{plan['id']}/reprice", headers=mum)
+    assert r.status_code == 400 and "already shopping" in r.json()["detail"]

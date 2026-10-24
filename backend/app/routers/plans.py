@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import DB, AdminUser, CurrentUser
-from app.models import Plan, PlanStatus
-from app.planner import fill_plan
+from app.models import Errand, Plan, PlanStatus
+from app.planner import fill_plan, has_any_price, reprice_plan
 from app.routers.ai_errors import ai_http_errors
 from app.schemas import MenuDay, PlanItemOut, PlanNutrition, PlanOut, PlanRequest, Swap
 
@@ -29,6 +29,16 @@ def plan_out(plan: Plan) -> PlanOut:
     )
 
 
+NO_PRICES = (
+    "None of your foods have a price yet. Add your market prices first so FamChop can keep the plan within budget."
+)
+
+
+def _require_prices(db: DB, family_id: int) -> None:
+    if not has_any_price(db, family_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_PRICES)
+
+
 def _get_family_plan(db: DB, plan_id: int, family_id: int) -> Plan:
     plan = db.get(Plan, plan_id)
     if plan is None or plan.family_id != family_id:
@@ -38,6 +48,7 @@ def _get_family_plan(db: DB, plan_id: int, family_id: int) -> Plan:
 
 @router.post("", response_model=PlanOut, status_code=status.HTTP_201_CREATED)
 def create_plan(body: PlanRequest, admin: AdminUser, db: DB) -> PlanOut:
+    _require_prices(db, admin.family_id)
     plan = Plan(
         family_id=admin.family_id,
         created_by=admin.id,
@@ -74,10 +85,27 @@ def regenerate_plan(plan_id: int, admin: AdminUser, db: DB, body: PlanRequest | 
     plan = _get_family_plan(db, plan_id, admin.family_id)
     if plan.status != PlanStatus.draft:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft plans can be regenerated")
+    _require_prices(db, admin.family_id)
     if body is not None:
         plan.budget, plan.notes, plan.pantry = body.budget, body.notes, body.pantry
     with ai_http_errors():
         fill_plan(db, plan)
+    db.commit()
+    db.refresh(plan)
+    return plan_out(plan)
+
+
+@router.post("/{plan_id}/reprice", response_model=PlanOut)
+def reprice(plan_id: int, admin: AdminUser, db: DB) -> PlanOut:
+    """Update the plan's costs from the current price list without asking the AI again."""
+    plan = _get_family_plan(db, plan_id, admin.family_id)
+    if db.scalar(select(Errand.id).where(Errand.plan_id == plan.id)) is not None:
+        # The shopper's list was based on these costs; changing them mid-errand would confuse the tally
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Someone is already shopping for this plan, so its costs can't change",
+        )
+    reprice_plan(db, plan)
     db.commit()
     db.refresh(plan)
     return plan_out(plan)

@@ -12,6 +12,7 @@ import { Badge, Button, BudgetBar, Card, CardTitle, EmptyState, Field, Input, Pa
 import { AiProgress } from "@/components/AiProgress";
 import { AssignErrandModal } from "@/components/AssignErrandModal";
 import { ErrandStatusBadge } from "@/components/ErrandStatusBadge";
+import { PricesModal } from "@/components/MissingPricesPrompt";
 
 const PLAN_MESSAGES = [
   "Reading your market prices…",
@@ -33,11 +34,15 @@ export default function PlanPage() {
   const errands = useErrands();
   const queryClient = useQueryClient();
   const [assignOpen, setAssignOpen] = useState(false);
+  // "before": asked for prices before planning; "after": filling in prices a plan is missing
+  const [pricesModal, setPricesModal] = useState<null | "before" | "after">(null);
+  const [pendingBody, setPendingBody] = useState<object | null>(null);
 
   const current = plan.data;
   const isDraft = current?.status === "draft";
   const errand = current ? errands.data?.find((e) => e.plan_id === current.id) : undefined;
   const unpricedPrices = prices.data?.filter((p) => p.price === null).length ?? 0;
+  const pricedPrices = (prices.data?.length ?? 0) - unpricedPrices;
 
   const onPlan = (p: Plan) => {
     queryClient.setQueryData(keys.latestPlan, p);
@@ -64,14 +69,36 @@ export default function PlanPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const reprice = useMutation({
+    mutationFn: (id: number) => api<Plan>(`/plans/${id}/reprice`, { method: "POST" }),
+    onSuccess: (p) => {
+      onPlan(p);
+      toast.success(`Costs updated: ${money(p.total_cost)} of ${money(p.budget)}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    generate.mutate({
+    const body = {
       budget: String(form.get("budget")),
       notes: String(form.get("notes") ?? ""),
       pantry: String(form.get("pantry") ?? ""),
-    });
+    };
+    if (unpricedPrices > 0) {
+      // Plans only count foods with a price, so ask first rather than produce a misleading total
+      setPendingBody(body);
+      setPricesModal("before");
+      return;
+    }
+    generate.mutate(body);
+  }
+
+  function planPending() {
+    setPricesModal(null);
+    if (pendingBody) generate.mutate(pendingBody);
+    setPendingBody(null);
   }
 
   if (plan.isLoading) return <PageLoading />;
@@ -138,11 +165,30 @@ export default function PlanPage() {
         <>
           <Card>
             <CardTitle>Budget</CardTitle>
-            <BudgetBar spent={current.total_cost} budget={current.budget} label="planned of" />
-            {current.unpriced_items.length > 0 && (
-              <p className="mt-3 text-sm text-muted">
-                Not counted (no price yet): {current.unpriced_items.join(", ")}
+            {current.items.length > 0 && current.unpriced_items.length === current.items.length ? (
+              <p className="text-sm">
+                <span className="text-lg font-semibold">Total unknown</span>
+                <span className="text-muted"> · budget {money(current.budget)}</span>
               </p>
+            ) : (
+              <BudgetBar spent={current.total_cost} budget={current.budget} label="planned of" />
+            )}
+            {current.unpriced_items.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 p-4">
+                <div className="text-sm">
+                  <p className="font-heading font-semibold text-cocoa">
+                    {current.unpriced_items.length === current.items.length
+                      ? "None of these foods have a price, so the total can't be worked out"
+                      : `${plural(current.unpriced_items.length, "food")} without a price ${current.unpriced_items.length === 1 ? "isn't" : "aren't"} in the total`}
+                  </p>
+                  <p className="mt-0.5 text-muted">{current.unpriced_items.join(", ")}</p>
+                </div>
+                {isAdmin && !errand && (
+                  <Button onClick={() => setPricesModal("after")} loading={reprice.isPending}>
+                    Add prices
+                  </Button>
+                )}
+              </div>
             )}
             {current.swaps.length > 0 && (
               <div className="mt-4 rounded-xl bg-danger/5 p-4">
@@ -200,6 +246,36 @@ export default function PlanPage() {
           <p className="text-center text-xs text-muted">{current.disclaimer}</p>
           <AssignErrandModal plan={current} open={assignOpen} onClose={() => setAssignOpen(false)} />
         </>
+      )}
+
+      <PricesModal
+        open={pricesModal === "before"}
+        onClose={() => setPricesModal(null)}
+        title="Add prices before planning?"
+        intro={
+          <>
+            {plural(unpricedPrices, "food")} on your list {unpricedPrices === 1 ? "has" : "have"} no price. The plan only
+            counts foods with a price, so its total would look lower than what you&apos;ll really spend.
+          </>
+        }
+        onSaved={() => {
+          toast.success("Prices saved");
+          planPending();
+        }}
+        secondaryAction={pricedPrices > 0 ? { label: "Plan without them", onClick: planPending } : undefined}
+      />
+      {current && (
+        <PricesModal
+          open={pricesModal === "after"}
+          onClose={() => setPricesModal(null)}
+          title="Add the missing prices"
+          intro="Enter what these cost at your market. The plan's total updates straight away; the meals stay the same."
+          extraItems={current.items.filter((i) => i.unit_price === null).map((i) => ({ item: i.item, unit: i.unit }))}
+          onSaved={() => {
+            setPricesModal(null);
+            reprice.mutate(current.id);
+          }}
+        />
       )}
     </div>
   );

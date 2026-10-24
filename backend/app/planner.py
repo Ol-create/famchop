@@ -303,3 +303,23 @@ def fill_plan(db: Session, plan: Plan) -> None:
     plan.swaps_json = (
         [s.model_dump() for s in _suggest_swaps(plan, prices)] if plan.total_cost > plan.budget else []
     )
+
+
+def has_any_price(db: Session, family_id: int) -> bool:
+    return db.scalar(select(Price.id).where(Price.family_id == family_id, Price.price.is_not(None)).limit(1)) is not None
+
+
+def reprice_plan(db: Session, plan: Plan) -> None:
+    """Recalculate every line from the family's current prices (e.g. after filling in missing ones).
+    No AI call: the menu and quantities stay the same."""
+    by_key = {_key(p.item, p.unit): p for p in _family_prices(db, plan.family_id)}
+    for item in plan.items:
+        price = by_key.get(_key(item.item, item.unit))
+        item.unit_price = price.price if price else None
+        item.subtotal = (
+            (item.quantity * item.unit_price).quantize(CENTS, ROUND_HALF_UP) if item.unit_price is not None else Decimal("0")
+        )
+    plan.total_cost = _total(plan.items)
+    # Swaps were suggested for the old totals; drop them once the plan fits
+    if plan.total_cost <= plan.budget:
+        plan.swaps_json = []
