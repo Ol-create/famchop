@@ -6,6 +6,8 @@ FamChop plans a week of Nigerian home-cooked meals from the prices *your* market
 
 > "Chop" is Nigerian slang for *eat*. FamChop = the whole family, eating well, together.
 
+**Jump to:** [What it does](#what-famchop-does) · [How Gemma 4 is used](#how-we-use-gemma-4) · [Quick start](#quick-start) · [Demo script](#2-minute-demo-script) · [Troubleshooting](#troubleshooting) · [License](#license)
+
 ---
 
 ## The problem
@@ -23,7 +25,7 @@ Generic meal apps don't know what garri costs at Oja Oba this week, and they don
 | | |
 |---|---|
 | 👨‍👩‍👧‍👦 **Family accounts** | One parent creates the family and shares an invite code (by WhatsApp). Everyone joins the same family. Up to 2 admins (Mum and Dad); everyone else is a member. |
-| 🏷️ **Your own prices** | A shared price table, prefilled with common items (rice, beans, garri, yam, eggs, palm oil…). You type what you actually pay. |
+| 🏷️ **Your own prices** | A shared price table, prefilled with common items (rice, beans, garri, yam, eggs, palm oil…). You type what you actually pay. After signing in, and again before planning, FamChop asks for any missing prices, so totals are never misleading. Draft plans update automatically when prices change. |
 | 🤖 **AI meal plan (Gemma 4)** | A 7-day breakfast/lunch/dinner menu of familiar Nigerian meals, balanced across protein, carbs, vegetables and fruit, respecting each member's dislikes and what's already in the kitchen. |
 | 💰 **Budget you can trust** | The AI decides *what* to buy. **Python does all the maths** from your price list. If the list is over budget, Gemma trims it, and if it's still over, suggests cheaper swaps. |
 | 🥗 **Nutrition check** | Age-aware priorities for the household ("the teen needs more protein; Ada avoids beans, so use fish and eggs") plus a weekly balance score. |
@@ -56,9 +58,22 @@ Generic meal apps don't know what garri costs at Oja Oba this week, and they don
 
 Results on live Gemma 4 for a family of 4: plans for ₦12k, ₦15k, ₦18k, ₦30k, ₦32k, ₦35k, ₦45k and ₦60k all came in at or under budget.
 
+## Quick start
+
+Once set up (below), FamChop is two servers running side by side, **each in its own terminal**:
+
+| Terminal | Folder | Command | Then open |
+|---|---|---|---|
+| 1. API | `backend/` | `.venv/Scripts/python -m uvicorn app.main:app --reload --port 8000` | http://localhost:8000/docs |
+| 2. Web app | `frontend/` | `npm run dev` | **http://localhost:3000** |
+
+Sign in with the demo family (`mum@adeyemi.example.com` / `famchop-demo`) after running the [demo data](#4-demo-data-optional) script.
+
 ## Running it locally
 
-**You need:** Python 3.12+, Node 20+, PostgreSQL 16 (a local install; no Docker needed), and a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+**You need:** Python 3.12+ (tested on 3.13), Node 20+, PostgreSQL 16 (a local install; no Docker needed), and a free Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+> **Paths:** commands are written for Windows (Git Bash or PowerShell). On macOS/Linux, use `.venv/bin/` instead of `.venv/Scripts/`.
 
 ### 1. Database
 
@@ -73,8 +88,8 @@ psql -U postgres -h localhost -c "CREATE ROLE famchop LOGIN PASSWORD 'famchop';"
 ```bash
 cd backend
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements-dev.txt   # macOS/Linux: .venv/bin/python
-cp .env.example .env        # then set GEMINI_API_KEY and a long random JWT_SECRET
+.venv/Scripts/python -m pip install -r requirements-dev.txt
+cp .env.example .env        # then edit .env: set GEMINI_API_KEY and a long random JWT_SECRET
 .venv/Scripts/alembic upgrade head
 .venv/Scripts/python -m scripts.smoke_gemma                    # checks the Gemma connection
 .venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
@@ -101,7 +116,14 @@ cd backend
 .venv/Scripts/python -m scripts.seed_demo --with-plan  # also pre-generates a draft plan with Gemma
 ```
 
-Logins are `mum@`, `dad@`, `tunde@` or `ada@adeyemi.example.com`, all with password `famchop-demo` (test data only). Re-running the script resets just that family.
+| Login | Role | Notes |
+|---|---|---|
+| `mum@adeyemi.example.com` | admin | Plans meals, funds the wallet, sends people to market |
+| `dad@adeyemi.example.com` | admin | Avoids pork |
+| `tunde@adeyemi.example.com` | member (teen) | The shopper |
+| `ada@adeyemi.example.com` | member (child) | Avoids beans and okra |
+
+All four use the password `famchop-demo` (test data only). Oranges are left unpriced on purpose, to show the missing-price prompt. Re-running the script resets just that family.
 
 ### Environment variables (`backend/.env`)
 
@@ -122,19 +144,30 @@ cd backend
 .venv/Scripts/python -m pytest -q
 ```
 
-There are 42 tests covering auth and roles, prices, the wallet, plan costing, the revise and swap passes, JSON repair and retries, and errand reconciliation. Gemma is replaced with scripted replies, so the tests are fast and need no API key. They use the local database and delete everything they create.
+There are 47 tests covering auth and roles, prices, the wallet, plan costing, the revise and swap passes, repricing when prices change, JSON repair and retries, and errand reconciliation. Gemma is replaced with scripted replies, so the tests are fast and need no API key. They use the local database and delete everything they create.
 
 ## 2-minute demo script
 
-1. **Mum signs in** (`mum@adeyemi.example.com`). The dashboard shows the family, the invite code with a WhatsApp share button, and a ₦40,000 wallet.
+1. **Mum signs in** (`mum@adeyemi.example.com`). FamChop asks for the one missing price: enter Oranges ₦2,000 and save. "It won't plan with prices it doesn't know." The dashboard shows the family, the invite code with a WhatsApp share button, and a ₦40,000 wallet.
 2. **Prices:** change Fish to ₦3,800 and save. "These are *my* market's prices."
 3. **Meal plan:** tap *Analyze our needs* to get age-aware priorities. In our runs it caught that Ada avoids beans and suggested fish and eggs. Set the budget to ₦35,000 and the pantry to "half bag of rice, palm oil", then tap *Plan my week*.
    *While it thinks (about 30–40s):* "Gemma picks the meals. Python does every naira."
-4. **Show the result:** the green budget bar, a 7-day menu with no beans for Ada, rice and palm oil skipped because they're in the pantry, the nutrition bars, and the unpriced Oranges flagged instead of guessed. **Approve**, then **Send someone to market**: Tunde, Oja Oba, ₦35,000.
+4. **Show the result:** the green budget bar, a 7-day menu that respects Ada's and Dad's dislikes, rice and palm oil skipped because they're in the pantry, the shopping list priced line by line, and the nutrition bars. **Approve**, then **Send someone to market**: Tunde, Oja Oba, ₦35,000.
 5. **Sign in as Tunde** on a phone. The banner says "You have shopping to do". Tick items, then type ₦8,000 for fish because it cost more today. Tap **Finish shopping**.
 6. The **result** shows released, spent and change returned. Show the **wallet**: change is back in it. Show **prices**: fish updated to Tunde's real price, ready for next week's plan.
 
-> Backup: run `seed_demo --with-plan` before presenting so a plan already exists if the network is slow.
+> Backup: run `seed_demo --with-plan` before presenting, so a plan already exists if the network is slow.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| "Can't reach the FamChop server" | The API isn't running. Start it in terminal 1 (see [Quick start](#quick-start)). |
+| Database or login errors | Check that the PostgreSQL service is running (on Windows: Services → `postgresql-x64-16` → Start) and that `DATABASE_URL` in `backend/.env` is correct. Run `alembic upgrade head` after pulling new code. |
+| "GEMINI_API_KEY is not set" | Put your key in `backend/.env` (not `.env.example`), save, and restart the API. Check it with `python -m scripts.smoke_gemma`. |
+| Planning shows "The AI planner had a problem" | Google's API had a hiccup that outlasted the automatic retries. Wait a moment and try again. |
+| Model not found | Copy the exact Gemma 4 model name from AI Studio into `GEMMA_MODEL` in `backend/.env`. |
+| Port 8000 or 3000 already in use | An old server is still running. Close its terminal, or stop the process. |
 
 ## Responsible design
 
@@ -159,7 +192,7 @@ backend/
     main.py            FastAPI app and routers
     models.py          SQLAlchemy models (families, users, prices, wallet, plans, errands)
     ai.py              Gemma client: streaming, retries, JSON extraction
-    planner.py         Prompts, costing, the revise-to-budget pass, swaps
+    planner.py         Prompts, costing, the revise-to-budget pass, swaps, repricing
     routers/           auth, me, family, prices, wallet, nutrition, plans, errands
   alembic/             Database migrations
   scripts/             smoke_gemma.py, seed_demo.py
@@ -167,8 +200,14 @@ backend/
 frontend/
   src/app/(auth)/      Sign in, sign up
   src/app/(app)/       Dashboard, plan, errands, prices, wallet, family
-  src/components/      UI kit, budget bar, AI progress, assign-errand modal
+  src/components/      UI kit, budget bar, AI progress, missing-price prompt, assign-errand modal
   src/lib/             API client, React Query hooks, types, formatting
 ```
+
+## License
+
+FamChop is open source under the [MIT License](LICENSE). Copyright (c) 2026 Ol-create.
+
+Gemma 4 is an open-weight model from Google and is used under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms). It is accessed through the Gemini API, and no model weights are included in this repository.
 
 Built with Next.js 14, FastAPI, PostgreSQL and Gemma 4.
