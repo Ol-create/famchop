@@ -139,7 +139,10 @@ class Plan(TimestampMixin, Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     budget: Mapped[Decimal] = mapped_column(Money)
     status: Mapped[PlanStatus] = mapped_column(_enum(PlanStatus, "plan_status"), default=PlanStatus.draft)
-    menu_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Free-text inputs kept so a plan can be regenerated with the same instructions
+    notes: Mapped[str | None] = mapped_column(Text)  # e.g. "no pork, kids don't like beans"
+    pantry: Mapped[str | None] = mapped_column(Text)  # e.g. "half bag of rice, palm oil"
+    menu_json: Mapped[list] = mapped_column(JSON, default=list)
     nutrition_json: Mapped[dict | None] = mapped_column(JSON)
     swaps_json: Mapped[list | None] = mapped_column(JSON)
     total_cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))

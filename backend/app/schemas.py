@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import AgeGroup, Role, TransactionType
+from app.models import AgeGroup, PlanStatus, Role, TransactionType
 
 
 class ORMModel(BaseModel):
@@ -175,3 +175,84 @@ class TransactionOut(BaseModel):
 class WalletOut(BaseModel):
     balance: Decimal
     transactions: list[TransactionOut]
+
+
+# ---------- AI: nutrition & plans ----------
+
+DISCLAIMER = (
+    "General guidance only, not medical advice. For medical conditions or special diets, "
+    "talk to a doctor or dietitian."
+)
+
+
+class NutritionAnalysis(BaseModel):
+    priorities: list[str]
+    focus_foods: list[str]
+    tips: list[str]
+    disclaimer: str = DISCLAIMER
+
+
+class PlanRequest(BaseModel):
+    budget: Decimal = Field(gt=0, le=MAX_MONEY, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=500)
+    pantry: str | None = Field(default=None, max_length=500)
+
+    @field_validator("notes", "pantry")
+    @classmethod
+    def strip_optional(cls, v: str | None) -> str | None:
+        return (v.strip() or None) if v is not None else None
+
+
+class MenuDay(BaseModel):
+    day: str
+    breakfast: str
+    lunch: str
+    dinner: str
+
+
+class NutritionScore(BaseModel):
+    """0-10 per food group for the week."""
+
+    protein: int = Field(ge=0, le=10)
+    carbs: int = Field(ge=0, le=10)
+    vegetables: int = Field(ge=0, le=10)
+    fruit: int = Field(ge=0, le=10)
+
+
+class PlanNutrition(BaseModel):
+    score: NutritionScore
+    note: str
+    tips: list[str] = []
+
+
+class Swap(BaseModel):
+    from_item: str
+    to_item: str
+    reason: str
+
+
+class PlanItemOut(ORMModel):
+    id: int
+    item: str
+    unit: str
+    quantity: Decimal
+    unit_price: Decimal | None
+    subtotal: Decimal
+
+
+class PlanOut(BaseModel):
+    id: int
+    status: PlanStatus
+    budget: Decimal
+    total_cost: Decimal
+    remaining: Decimal  # negative when over budget
+    over_budget: bool
+    unpriced_items: list[str]  # items the family has no price for, so they're not in total_cost
+    notes: str | None
+    pantry: str | None
+    menu: list[MenuDay]
+    nutrition: PlanNutrition | None
+    swaps: list[Swap]
+    items: list[PlanItemOut]
+    created_at: datetime
+    disclaimer: str = DISCLAIMER
