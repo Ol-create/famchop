@@ -3,9 +3,13 @@
 import json
 import logging
 import re
+import time
 from typing import Any
 
+import httpx
 from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 
 from app.config import get_settings
 
@@ -28,18 +32,63 @@ def _get_client() -> genai.Client:
     return _client
 
 
+REQUEST_TIMEOUT_MS = 120_000
+RETRY_DELAYS_S = (2, 6)  # after the 1st and 2nd failure; 3 attempts total
+
+# Set once we learn the configured model rejects thinking_level, so we stop sending it
+_thinking_unsupported = False
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, genai_errors.ServerError):  # 5xx: Google-side blip
+        return True
+    if isinstance(exc, genai_errors.ClientError):
+        return exc.code == 429  # rate limited
+    # Network trouble / timeouts from the HTTP layer
+    return isinstance(exc, httpx.TransportError)
+
+
+def _config() -> types.GenerateContentConfig:
+    level = get_settings().gemma_thinking_level
+    return types.GenerateContentConfig(
+        # Gemma 4 thinks at length by default (~6k hidden tokens, 2.5 min for a meal plan).
+        # MINIMAL brings that to ~25s with the same quality JSON.
+        thinking_config=types.ThinkingConfig(thinking_level=level) if level and not _thinking_unsupported else None,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
+
+
+def _generate(client: genai.Client, prompt: str) -> str:
+    # Streaming keeps the connection active, so long replies don't hit read timeouts
+    chunks = client.models.generate_content_stream(model=get_settings().gemma_model, contents=prompt, config=_config())
+    return "".join(c.text for c in chunks if c.text)
+
+
 def ask_ai(prompt: str) -> str:
-    try:
-        response = _get_client().models.generate_content(
-            model=get_settings().gemma_model,
-            contents=prompt,
-        )
-    except AIError:
-        raise
-    except Exception as exc:
-        log.exception("Gemma request failed")
-        raise AIError(f"AI request failed: {exc.__class__.__name__}") from exc
-    return response.text or ""
+    global _thinking_unsupported
+    client = _get_client()
+    for attempt, delay in enumerate((*RETRY_DELAYS_S, None), start=1):
+        try:
+            return _generate(client, prompt)
+        except Exception as exc:
+            if (
+                isinstance(exc, genai_errors.ClientError)
+                and exc.code == 400
+                and "thinking" in str(exc).lower()
+                and not _thinking_unsupported
+            ):
+                log.warning("Model doesn't support thinking_level; retrying without it")
+                _thinking_unsupported = True
+                try:
+                    return _generate(client, prompt)
+                except Exception as retry_exc:
+                    exc = retry_exc
+            if delay is None or not _is_transient(exc):
+                log.exception("Gemma request failed (attempt %d)", attempt)
+                raise AIError(f"AI request failed: {exc.__class__.__name__}") from exc
+            log.warning("Gemma request failed (attempt %d), retrying in %ss: %s", attempt, delay, exc)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
