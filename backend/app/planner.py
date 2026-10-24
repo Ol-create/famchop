@@ -28,7 +28,8 @@ MAX_SWAPS = 5
 class _AIGroceryLine(BaseModel):
     item: str = Field(min_length=1, max_length=120)
     unit: str = Field(min_length=1, max_length=40)
-    quantity: Decimal = Field(gt=0, le=10_000)
+    # 0 is allowed (the model uses it to mean "drop this line"); cost_plan_items skips those
+    quantity: Decimal = Field(ge=0, le=10_000)
 
 
 class _AIScore(BaseModel):
@@ -58,6 +59,13 @@ class _AIPlan(BaseModel):
     menu: list[MenuDay] = Field(min_length=7, max_length=7)
     grocery_list: list[_AIGroceryLine] = Field(min_length=1, max_length=80)
     nutrition: _AINutrition
+
+    @field_validator("grocery_list")
+    @classmethod
+    def something_to_buy(cls, v: list[_AIGroceryLine]) -> list[_AIGroceryLine]:
+        if not any(line.quantity > 0 for line in v):
+            raise ValueError("grocery_list has no items with quantity above 0")
+        return v
 
 
 class _AISwaps(BaseModel):
@@ -152,18 +160,25 @@ MARKET PRICE LIST (item | unit | price per unit)
 {_price_table(prices)}
 
 RULES
+- THE BUDGET IS A HARD LIMIT. The grocery list must cost at most NGN {plan.budget}; aim for 85-95% of it.
+- Work in this order: first split the budget across food groups, then build the grocery list inside that split,
+  then write the menu using only what is on the grocery list (plus what is already in the kitchen).
+- For each grocery line, est_cost = quantity x price per unit, and running_total adds up the est_cost so far.
+  If running_total would pass the budget, buy less or choose a cheaper item instead.
+- Cheap staples (garri, rice, beans, yam, bread) should fill most meals; use costly protein (chicken, fish, eggs)
+  in modest amounts. Leftovers and repeated meals are fine and realistic.
 - 7 days, Monday to Sunday, with breakfast, lunch and dinner. Use familiar Nigerian meals.
 - Balance protein, carbohydrates, vegetables and fruit across the week. Respect every dislike.
-- grocery_list must contain everything needed to cook the whole menu for the whole household.
 - For grocery_list "item" and "unit", copy the EXACT text from the price list whenever the item is listed there.
   Only add items that are not on the list if truly necessary (e.g. seasoning), with a sensible unit.
 - "quantity" is how many of that unit to buy for the week (a number, decimals allowed).
-- Aim for the total cost (quantity x price) to stay within the budget. Do NOT calculate costs yourself.
 
-JSON shape:
+JSON shape (keys in this order):
 {{
+  "budget_split": {{"carbs": 0, "protein": 0, "vegetables_fruit": 0, "oils_seasoning": 0}},
+  "grocery_list": [{{"item": "Rice", "unit": "kg", "quantity": 5, "est_cost": 7500, "running_total": 7500}}],
+  "estimated_total": 0,
   "menu": [{{"day": "Monday", "breakfast": "...", "lunch": "...", "dinner": "..."}}],
-  "grocery_list": [{{"item": "Rice", "unit": "kg", "quantity": 5}}],
   "nutrition": {{
     "score": {{"protein": 0-10, "carbs": 0-10, "vegetables": 0-10, "fruit": 0-10}},
     "note": "one or two sentences on how balanced the week is",
@@ -223,13 +238,66 @@ JSON shape:
         return []
 
 
+class _AIRevision(BaseModel):
+    grocery_list: list[_AIGroceryLine] = Field(min_length=1, max_length=80)
+
+
+def _total(items: list[PlanItem]) -> Decimal:
+    return sum((i.subtotal for i in items), Decimal("0"))
+
+
+def _revise_to_budget(items: list[PlanItem], budget: Decimal, prices: list[Price]) -> list[PlanItem] | None:
+    """One extra Gemma pass that trims an over-budget list. Python enforces that it can only shrink:
+    new items are dropped and quantities are capped at the original, so the menu stays cookable."""
+    total = _total(items)
+    lines = "\n".join(
+        f"- {i.item} | {i.unit} | qty {i.quantity} | "
+        + (f"NGN {i.unit_price} each = NGN {i.subtotal}" if i.unit_price is not None else "price unknown")
+        for i in sorted(items, key=lambda i: -i.subtotal)
+    )
+    prompt = f"""This weekly grocery list for a Nigerian family costs NGN {total}, but the budget is NGN {budget}.
+It is NGN {total - budget} over. Trim it so it costs at most NGN {budget} (aim for about 95% of it).
+
+CURRENT LIST (item | unit | quantity | cost; most expensive first)
+{lines}
+
+RULES
+- You may ONLY reduce quantities or remove lines. Do not add new items or increase any quantity.
+- Cut expensive items (meat, fish, eggs, oil) before cheap staples, but keep some protein for the children.
+- Keep "item" and "unit" text exactly as above.
+- For each line, est_cost = quantity x price each, and running_total adds them up. Stop cutting once
+  running_total is within the budget.
+
+JSON shape:
+{{"grocery_list": [{{"item": "Rice", "unit": "kg", "quantity": 4, "est_cost": 6000, "running_total": 6000}}]}}"""
+    try:
+        revision: _AIRevision = ask_json(prompt, validate=_AIRevision.model_validate)
+    except AIError:
+        log.warning("Budget revise pass failed; keeping the original list", exc_info=True)
+        return None
+
+    original = {_key(i.item, i.unit): i.quantity for i in items}
+    allowed = [
+        line.model_copy(update={"quantity": min(line.quantity, original[_key(line.item, line.unit)])})
+        for line in revision.grocery_list
+        if _key(line.item, line.unit) in original
+    ]
+    if not allowed:
+        return None
+    revised = cost_plan_items(allowed, prices)
+    return revised if _total(revised) < total else None
+
+
 def fill_plan(db: Session, plan: Plan) -> None:
     """Ask Gemma for a menu + grocery list, then price it. Replaces any existing content on `plan`."""
     prices = _family_prices(db, plan.family_id)
     result: _AIPlan = ask_json(_plan_prompt(db, plan, prices), validate=_AIPlan.model_validate)
 
-    plan.items = cost_plan_items(result.grocery_list, prices)
-    plan.total_cost = sum((i.subtotal for i in plan.items), Decimal("0"))
+    items = cost_plan_items(result.grocery_list, prices)
+    if _total(items) > plan.budget:
+        items = _revise_to_budget(items, plan.budget, prices) or items
+    plan.items = items
+    plan.total_cost = _total(items)
     plan.menu_json = [d.model_dump() for d in result.menu]
     plan.nutrition_json = PlanNutrition.model_validate(result.nutrition.model_dump()).model_dump()
     plan.swaps_json = (

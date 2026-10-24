@@ -67,22 +67,73 @@ def test_admin_creates_plan_under_budget(client, gemma, family):
         assert expected in prompt, expected
 
 
-def test_over_budget_plan_gets_swaps(client, gemma, family):
+def revise_reply(grocery):
+    return {"grocery_list": grocery}
+
+
+def test_over_budget_plan_is_revised_to_fit(client, gemma, family):
     gemma.queue(
         plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 4}, {"item": "Rice", "unit": "kg", "quantity": 5}]),
+        revise_reply([{"item": "Chicken", "unit": "kg", "quantity": 3.5, "est_cost": 1}, {"item": "Rice", "unit": "kg", "quantity": 5}]),
+    )
+    plan = client.post("/plans", headers=family["mum"], json={"budget": 30000}).json()
+    # 31,500 -> 3.5*6000 + 5*1500 = 28,500
+    assert plan["total_cost"] == "28500.00" and plan["over_budget"] is False
+    assert plan["swaps"] == [] and len(gemma.prompts) == 2
+    assert "NGN 1500.00 over" in gemma.prompts[1] and "Chicken | kg | qty 4.00 | NGN 6000.00 each = NGN 24000.00" in gemma.prompts[1]
+
+
+def test_revise_can_only_shrink_the_list(client, gemma, family):
+    gemma.queue(
+        plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 4}, {"item": "Rice", "unit": "kg", "quantity": 5},
+                    {"item": "Beans", "unit": "kg", "quantity": 2}]),
+        revise_reply([
+            {"item": "Chicken", "unit": "kg", "quantity": 10},  # increase -> capped at 4
+            {"item": "Eggs", "unit": "crate", "quantity": 1},  # new item -> dropped
+            {"item": "Rice", "unit": "kg", "quantity": 2},
+            {"item": "Beans", "unit": "kg", "quantity": 0},  # 0 -> removed
+        ]),
+        {"swaps": [{"from_item": "Chicken", "to_item": "Fish (frozen)", "reason": "Cheaper protein"}]},
+    )
+    plan = client.post("/plans", headers=family["mum"], json={"budget": 20000}).json()
+    assert {i["item"]: i["quantity"] for i in plan["items"]} == {"Chicken": "4.00", "Rice": "2.00"}
+    assert plan["total_cost"] == "27000.00" and plan["over_budget"] is True
+    assert plan["swaps"][0]["to_item"] == "Fish (frozen)"
+
+
+def test_revise_that_does_not_save_money_is_ignored(client, gemma, family):
+    gemma.queue(
+        plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 4}]),
+        revise_reply([{"item": "Chicken", "unit": "kg", "quantity": 4}]),
+        {"swaps": []},
+    )
+    plan = client.post("/plans", headers=family["mum"], json={"budget": 10000}).json()
+    assert plan["total_cost"] == "24000.00" and len(gemma.prompts) == 3
+
+
+def test_over_budget_after_revise_gets_swaps(client, gemma, family):
+    gemma.queue(
+        plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 4}, {"item": "Rice", "unit": "kg", "quantity": 5}]),
+        revise_reply([{"item": "Chicken", "unit": "kg", "quantity": 3}, {"item": "Rice", "unit": "kg", "quantity": 5}]),
         "```json\n" + '{"swaps": [{"from_item": "Chicken", "to_item": "Fish (frozen)", "reason": "Cheaper protein"}]}' + "\n```",
     )
     plan = client.post("/plans", headers=family["mum"], json={"budget": 20000}).json()
-    assert plan["total_cost"] == "31500.00"
-    assert plan["over_budget"] is True and plan["remaining"] == "-11500.00"
+    assert plan["total_cost"] == "25500.00"
+    assert plan["over_budget"] is True and plan["remaining"] == "-5500.00"
     assert plan["swaps"] == [{"from_item": "Chicken", "to_item": "Fish (frozen)", "reason": "Cheaper protein"}]
-    assert "NGN 11500.00 over" in gemma.prompts[1]
+    assert "NGN 5500.00 over" in gemma.prompts[2]
 
 
-def test_swaps_failure_does_not_lose_the_plan(client, gemma, family):
-    gemma.queue(plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 10}]), "nope", "still nope")
+def test_revise_and_swaps_failures_do_not_lose_the_plan(client, gemma, family):
+    gemma.queue(plan_reply([{"item": "Chicken", "unit": "kg", "quantity": 10}]), "bad", "bad", "nope", "still nope")
     r = client.post("/plans", headers=family["mum"], json={"budget": 1000})
-    assert r.status_code == 201 and r.json()["swaps"] == []
+    assert r.status_code == 201 and r.json()["swaps"] == [] and r.json()["total_cost"] == "60000.00"
+
+
+def test_all_zero_grocery_list_is_retried(client, gemma, family):
+    gemma.queue(plan_reply([{"item": "Rice", "unit": "kg", "quantity": 0}]), plan_reply([{"item": "Rice", "unit": "kg", "quantity": 1}]))
+    r = client.post("/plans", headers=family["mum"], json={"budget": 5000})
+    assert r.status_code == 201 and r.json()["total_cost"] == "1500.00"
 
 
 def test_broken_json_is_retried(client, gemma, family):

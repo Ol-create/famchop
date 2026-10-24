@@ -32,7 +32,8 @@ def _get_client() -> genai.Client:
     return _client
 
 
-REQUEST_TIMEOUT_MS = 120_000
+# Max wait for the next streamed chunk; plans normally start streaming within ~6s
+REQUEST_TIMEOUT_MS = 60_000
 RETRY_DELAYS_S = (2, 6)  # after the 1st and 2nd failure; 3 attempts total
 
 # Set once we learn the configured model rejects thinking_level, so we stop sending it
