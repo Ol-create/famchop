@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getToken, setToken } from "@/lib/api";
 import { useMe, useMyErrands } from "@/lib/queries";
 import { Badge, Logo, PageLoading } from "@/components/ui";
+import { MissingPricesPrompt } from "@/components/MissingPricesPrompt";
 
 const NAV = [
   { href: "/dashboard", label: "Home" },
@@ -84,6 +85,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </nav>
       </header>
       <main className="mx-auto max-w-5xl px-4 pt-6">{children}</main>
+      {/* Only admins can edit prices, so only they get asked */}
+      {me.data.role === "admin" && <MissingPricesPrompt />}
     </div>
   );
 }
