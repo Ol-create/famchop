@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import AgeGroup, PlanStatus, Role, TransactionType
+from app.models import AgeGroup, ErrandStatus, PlanStatus, Role, TransactionType
 
 
 class ORMModel(BaseModel):
@@ -256,3 +256,62 @@ class PlanOut(BaseModel):
     items: list[PlanItemOut]
     created_at: datetime
     disclaimer: str = DISCLAIMER
+
+
+# ---------- Errands ----------
+
+
+class ErrandCreate(BaseModel):
+    plan_id: int
+    assigned_to: int
+    # Cash handed over from the wallet; defaults to the plan's total cost
+    released_amount: Decimal | None = Field(default=None, gt=0, le=MAX_MONEY, decimal_places=2)
+    market: str | None = Field(default=None, max_length=120)
+
+    @field_validator("market")
+    @classmethod
+    def strip_optional(cls, v: str | None) -> str | None:
+        return (v.strip() or None) if v is not None else None
+
+
+class ErrandItemUpdate(BaseModel):
+    bought: bool | None = None
+    # What was actually paid for this whole line (not per unit). Null clears it.
+    actual_price: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY, decimal_places=2)
+
+
+class PersonOut(BaseModel):
+    id: int
+    name: str
+
+
+class ErrandItemOut(BaseModel):
+    id: int
+    item: str
+    unit: str
+    quantity: Decimal
+    unit_price: Decimal | None
+    planned_cost: Decimal
+    bought: bool
+    actual_price: Decimal | None
+
+
+class ErrandOut(BaseModel):
+    id: int
+    plan_id: int
+    status: ErrandStatus
+    assigned_to: PersonOut
+    assigned_by: PersonOut | None
+    market: str | None
+    released_amount: Decimal
+    planned_total: Decimal
+    bought_count: int
+    item_count: int
+    # Running total of actual prices so far; final once completed
+    spent_so_far: Decimal
+    actual_spent: Decimal | None
+    # released - spent: positive = change returned to the wallet, negative = wallet reimbursed the shopper
+    change: Decimal | None
+    items: list[ErrandItemOut]
+    created_at: datetime
+    completed_at: datetime | None
