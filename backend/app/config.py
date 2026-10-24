@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://famchop:famchop@localhost:5433/famchop"
+    database_url: str = "postgresql+psycopg://famchop:famchop@localhost:5432/famchop"
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 60 * 24 * 7
     gemini_api_key: str = ""
